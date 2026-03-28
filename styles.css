@@ -380,3 +380,26 @@ h1 {
     max-width: none;
   }
 }
+
+.site-footer {
+  text-align: center;
+  padding: 2rem 1rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--panel-border);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.site-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+  transition: opacity 160ms ease;
+}
+
+.site-footer a:hover {
+  opacity: 0.8;
+}

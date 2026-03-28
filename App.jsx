@@ -774,6 +774,19 @@ export default function App() {
           </section>
         </section>
       </main>
+
+      <footer className="site-footer">
+        <p>
+          Built with React, Vite, Solidity, and MetaMask on Ethereum Sepolia.
+        </p>
+        <a
+          href="https://github.com/arijitkroy/Web3-Vault"
+          target="_blank"
+          rel="noreferrer"
+        >
+          View on GitHub
+        </a>
+      </footer>
     </>
   );
 }
