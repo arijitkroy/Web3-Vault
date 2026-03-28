@@ -6,8 +6,9 @@ import {
   ensureSepoliaNetwork,
   getEthereumProvider,
   readWalletSnapshot,
+  registerReceiptOnChain,
   SEPOLIA_CHAIN_ID,
-  sendVaultActionTransaction,
+  sendVaultPayment,
   shortenAddress
 } from "./wallet";
 
@@ -24,8 +25,8 @@ const securityCards = [
   },
   {
     label: "Network",
-    title: "Pay per action",
-    text: "Each encrypt click and each decrypt click requires its own Sepolia MetaMask transaction and gas payment."
+    title: "Smart contract billing",
+    text: "Each encrypt and decrypt action calls a Solidity smart contract on Sepolia that collects a fee and records an on-chain event."
   }
 ];
 
@@ -113,7 +114,7 @@ export default function App() {
   const [paymentSession, setPaymentSession] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState({
     type: "warning",
-    message: "Each encrypt and decrypt action will request a Sepolia payment transaction in MetaMask."
+    message: "Each encrypt and decrypt action calls the VaultPayment contract on Sepolia."
   });
   const [paymentBusy, setPaymentBusy] = useState(false);
 
@@ -270,7 +271,7 @@ export default function App() {
     setPaymentSession(null);
     setPaymentStatus({
       type: "warning",
-      message: "Each encrypt and decrypt action will request a Sepolia payment transaction in MetaMask."
+      message: "Each encrypt and decrypt action calls the VaultPayment contract on Sepolia."
     });
   }, [wallet.account, wallet.chainId, wallet.isSepolia]);
 
@@ -298,7 +299,7 @@ export default function App() {
     setPaymentSession(null);
     setPaymentStatus({
       type: "warning",
-      message: "Each encrypt and decrypt action will request a Sepolia payment transaction in MetaMask."
+      message: "Each encrypt and decrypt action calls the VaultPayment contract on Sepolia."
     });
     setEncryptResult(null);
     setDecryptResult(null);
@@ -356,12 +357,12 @@ export default function App() {
     }
 
     setPaymentBusy(true);
-    setPaymentStatus({ type: "", message: `Requesting MetaMask payment transaction for ${actionLabel}. You will pay normal Sepolia gas.` });
+    setPaymentStatus({ type: "", message: `Calling VaultPayment contract for ${actionLabel}. You will pay the contract fee plus Sepolia gas.` });
 
     try {
-      const txHash = await sendVaultActionTransaction(wallet.account);
+      const txHash = await sendVaultPayment(wallet.account, actionLabel, getblockSession.rpcUrl);
 
-      setPaymentStatus({ type: "", message: `${actionLabel} transaction submitted. Waiting for Sepolia confirmation...` });
+      setPaymentStatus({ type: "", message: `${actionLabel} contract call submitted. Waiting for Sepolia confirmation...` });
 
       const receipt = await waitForTransactionReceipt(getblockSession.rpcUrl, txHash);
 
@@ -370,13 +371,13 @@ export default function App() {
       }
 
       const paymentContext = {
-        method: "eth_sendTransaction",
+        method: "VaultPayment.payForAction",
         network: "Sepolia",
         txHash,
         blockNumber: receipt.blockNumber,
-        value: "0",
-        gasPaidByUser: true,
-        confirmationType: "self-transaction",
+        contractAddress: receipt.to,
+        feePaidByUser: true,
+        confirmationType: "smart-contract",
         purpose: actionLabel,
         paidAt: new Date().toISOString()
       };
@@ -449,12 +450,22 @@ export default function App() {
         }
       });
 
+      let registryNote = "";
+      try {
+        setEncryptStatus({ type: "", message: "Anchoring receipt hash on-chain via VaultRegistry..." });
+        const regResult = await registerReceiptOnChain(wallet.account, result.manifest);
+        await waitForTransactionReceipt(getblockSession.rpcUrl, regResult.txHash);
+        registryNote = ` Receipt hash anchored on-chain: ${shortenHash(regResult.receiptHash)}.`;
+      } catch (regError) {
+        registryNote = " Receipt anchoring skipped (registry transaction failed or was rejected).";
+      }
+
       startTransition(() => {
         setEncryptResult({
           encryptedDownload: createDownloadState(result.encryptedBlob, result.encryptedFilename),
           manifestDownload: createDownloadState(result.manifestBlob, result.manifestFilename),
           encryptedSummary: `Encrypted ${encryptFile.name} into ${result.encryptedFilename} (${formatBytes(result.encryptedBlob.size)}).`,
-          manifestSummary: `Receipt records AES-256-GCM settings, wallet ${shortenAddress(wallet.account)}, and Sepolia transaction ${shortenHash(paymentContext.txHash)} for this encryption.`
+          manifestSummary: `Receipt records AES-256-GCM settings, wallet ${shortenAddress(wallet.account)}, and Sepolia contract payment ${shortenHash(paymentContext.txHash)}.${registryNote}`
         });
         setEncryptStatus({
           type: "success",
@@ -587,7 +598,7 @@ export default function App() {
             <div className="wallet-card">
               <span className="wallet-label">Last payment</span>
               <strong>{paymentSession?.txHash ? "Confirmed" : "Pending action"}</strong>
-              <p>{paymentSession?.txHash ? `${paymentSession.purpose}: ${shortenHash(paymentSession.txHash)}` : "Each encrypt and decrypt click requests a fresh Sepolia payment transaction."}</p>
+              <p>{paymentSession?.txHash ? `${paymentSession.purpose}: ${shortenHash(paymentSession.txHash)}` : "Each encrypt and decrypt click calls the VaultPayment smart contract."}</p>
             </div>
           </div>
 

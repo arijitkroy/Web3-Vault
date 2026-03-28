@@ -1,3 +1,12 @@
+import {
+  VAULT_PAYMENT_ADDRESS,
+  VAULT_REGISTRY_ADDRESS,
+  encodePayForAction,
+  encodeRegisterReceipt,
+  encodeFeeCall,
+  hashReceiptForRegistry
+} from "./contracts";
+
 export const SEPOLIA_CHAIN_ID = "0xaa36a7";
 
 export const SEPOLIA_NETWORK = {
@@ -92,7 +101,31 @@ export async function ensureSepoliaNetwork(customRpcUrl) {
   return readWalletSnapshot();
 }
 
-export async function sendVaultActionTransaction(fromAddress) {
+export async function fetchContractFee(rpcUrl) {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "eth_call",
+      params: [
+        { to: VAULT_PAYMENT_ADDRESS, data: encodeFeeCall() },
+        "latest"
+      ],
+      id: "fee-query"
+    })
+  });
+
+  const payload = await response.json();
+
+  if (payload?.error) {
+    throw new Error(payload.error.message || "Unable to read contract fee.");
+  }
+
+  return payload?.result || "0x0";
+}
+
+export async function sendVaultPayment(fromAddress, actionType, rpcUrl) {
   const provider = getEthereumProvider();
 
   if (!provider) {
@@ -103,16 +136,46 @@ export async function sendVaultActionTransaction(fromAddress) {
     throw new Error("Connect MetaMask before creating a payment transaction.");
   }
 
+  const feeHex = await fetchContractFee(rpcUrl);
+  const data = encodePayForAction(actionType);
+
   const txHash = await provider.request({
     method: "eth_sendTransaction",
     params: [{
       from: fromAddress,
-      to: fromAddress,
-      value: "0x0"
+      to: VAULT_PAYMENT_ADDRESS,
+      value: feeHex,
+      data,
+      gas: "0x186a0"
     }]
   });
 
   return txHash;
+}
+
+export async function registerReceiptOnChain(fromAddress, receiptJson) {
+  const provider = getEthereumProvider();
+
+  if (!provider) {
+    throw new Error("MetaMask was not detected in this browser.");
+  }
+
+  const receiptHash = await hashReceiptForRegistry(receiptJson);
+
+  const data = encodeRegisterReceipt(receiptHash);
+
+  const txHash = await provider.request({
+    method: "eth_sendTransaction",
+    params: [{
+      from: fromAddress,
+      to: VAULT_REGISTRY_ADDRESS,
+      value: "0x0",
+      data,
+      gas: "0x13880"
+    }]
+  });
+
+  return { txHash, receiptHash };
 }
 
 export function shortenAddress(address) {

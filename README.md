@@ -24,20 +24,14 @@ The wallet is not only for display.
 
 For every encrypt action and every decrypt action:
 
-1. the app asks MetaMask to submit a Sepolia transaction
-2. the user approves it
-3. the user pays Sepolia gas
-4. the app waits for the transaction receipt
-5. only then does the encrypt or decrypt action continue
+1. the app calls the `VaultPayment` smart contract on Sepolia via MetaMask
+2. MetaMask opens a real transaction prompt showing the contract fee
+3. the user approves it
+4. the user pays the contract fee plus Sepolia gas
+5. the app waits for the transaction receipt
+6. only then does the encrypt or decrypt action continue
 
-Current implementation detail:
-
-- the payment transaction is a self-transaction
-- the transaction value is `0`
-- the user still pays real Sepolia gas
-- the receipt JSON stores the transaction proof for the encrypt action
-
-This is a real wallet-and-gas flow, but it is not yet a smart-contract billing system.
+After encryption, the app also calls the `VaultRegistry` smart contract to anchor the receipt hash on-chain for immutable proof.
 
 ## Security warning
 
@@ -49,18 +43,28 @@ Only use a GetBlock token you are comfortable exposing client-side. If you need 
 
 ## Project structure
 
-Core files:
+Frontend files:
 
 - [index.html](/d:/CollabGithub/Web3-Vault/index.html): Vite HTML entry
 - [main.jsx](/d:/CollabGithub/Web3-Vault/main.jsx): React bootstrap
 - [App.jsx](/d:/CollabGithub/Web3-Vault/App.jsx): UI, MetaMask flow, payment flow, encrypt/decrypt flow
 - [styles.css](/d:/CollabGithub/Web3-Vault/styles.css): styling
 - [vault.js](/d:/CollabGithub/Web3-Vault/vault.js): browser encryption and decryption helpers
-- [wallet.js](/d:/CollabGithub/Web3-Vault/wallet.js): MetaMask, Sepolia, and transaction helpers
+- [wallet.js](/d:/CollabGithub/Web3-Vault/wallet.js): MetaMask, Sepolia, smart contract interaction helpers
+- [contracts.js](/d:/CollabGithub/Web3-Vault/contracts.js): deployed contract addresses, ABI fragments, and ABI encoding helpers
 - [getblock.config.js](/d:/CollabGithub/Web3-Vault/getblock.config.js): GetBlock token/config module
 - [getblock.js](/d:/CollabGithub/Web3-Vault/getblock.js): GetBlock RPC resolution and receipt polling
 - [vite.config.js](/d:/CollabGithub/Web3-Vault/vite.config.js): Vite config with GitHub Pages base handling
 - [.github/workflows/deploy.yml](/d:/CollabGithub/Web3-Vault/.github/workflows/deploy.yml): GitHub Pages deployment workflow
+
+Smart contract files:
+
+- [contracts/VaultPayment.sol](/d:/CollabGithub/Web3-Vault/contracts/VaultPayment.sol): Solidity fee-collection contract
+- [contracts/VaultRegistry.sol](/d:/CollabGithub/Web3-Vault/contracts/VaultRegistry.sol): Solidity on-chain receipt registry
+- [hardhat.config.cjs](/d:/CollabGithub/Web3-Vault/hardhat.config.cjs): Hardhat v2 configuration
+- [scripts/deploy.cjs](/d:/CollabGithub/Web3-Vault/scripts/deploy.cjs): contract deployment script
+- [test/VaultPayment.test.cjs](/d:/CollabGithub/Web3-Vault/test/VaultPayment.test.cjs): payment contract tests
+- [test/VaultRegistry.test.cjs](/d:/CollabGithub/Web3-Vault/test/VaultRegistry.test.cjs): registry contract tests
 
 ## How the dapp works
 
@@ -77,12 +81,15 @@ Core files:
 
 For every `Pay gas and encrypt` click and every `Pay gas and decrypt` click:
 
-1. the app requests `eth_sendTransaction`
-2. MetaMask opens a real transaction prompt
-3. the user approves it
-4. the user pays Sepolia gas
+1. the app reads the current fee from the `VaultPayment` contract
+2. the app encodes a `payForAction()` call and sends it via MetaMask
+3. MetaMask opens a transaction prompt showing the contract fee
+4. the user approves and pays the fee plus Sepolia gas
 5. the app polls the GetBlock RPC with `eth_getTransactionReceipt`
 6. the requested action runs only after the receipt is confirmed
+7. the contract emits an `ActionPaid` event with the user address, action type, and amount
+
+After encryption, the app also calls `VaultRegistry.registerReceipt()` to anchor the receipt hash on-chain.
 
 ### Encryption flow
 
@@ -480,18 +487,60 @@ GitHub Actions will build and publish the site automatically.
 - Make sure the original passphrase is correct.
 - Make sure the decrypt payment transaction succeeded.
 
+## Smart contracts
+
+The app uses two Solidity smart contracts deployed on Ethereum Sepolia.
+
+### VaultPayment
+
+Collects a configurable fee for each encrypt and decrypt action.
+
+- Contract: [`0x59b19C5982f1444f620fC642839A3fea046d0F59`](https://sepolia.etherscan.io/address/0x59b19C5982f1444f620fC642839A3fea046d0F59)
+- Solidity: `^0.8.20`
+- Gas optimized with custom errors
+- Key function: `payForAction(string actionType)` — payable, accepts the fee and emits `ActionPaid`
+- Owner functions: `setFee(uint256)`, `withdraw()`, `transferOwnership(address)`
+
+### VaultRegistry
+
+Anchors vault receipt hashes on-chain for immutable proof of encryption events.
+
+- Contract: [`0xd736E7D4b3eF43fE0790607B21e0d1e9E005b1e7`](https://sepolia.etherscan.io/address/0xd736E7D4b3eF43fE0790607B21e0d1e9E005b1e7)
+- Solidity: `^0.8.20`
+- Gas optimized with custom errors and lean storage (no struct overhead)
+- Key function: `registerReceipt(bytes32 receiptHash)` — stores the hash and emits `ReceiptRegistered`
+- View functions: `verifyReceipt(address, bytes32)`, `getReceiptCount(address)`, `getReceipt(address, uint256)`
+
+### Redeploying contracts
+
+If you need to redeploy:
+
+1. Copy `.env.example` to `.env` and fill in `SEPOLIA_RPC_URL` and `DEPLOYER_PRIVATE_KEY`.
+2. Run:
+
+```powershell
+npx hardhat run scripts/deploy.cjs --network sepolia --config hardhat.config.cjs
+```
+
+3. Update the addresses in [contracts.js](/d:/CollabGithub/Web3-Vault/contracts.js).
+
+### Running contract tests
+
+```powershell
+npx hardhat test --config hardhat.config.cjs
+```
+
+18 tests cover fee payment, rejection, withdrawals, ownership, receipt registration, verification, and user isolation.
+
 ## Current limitations
 
 - This is a client-side encryption app, not a backend storage service.
 - The GetBlock token is public because the site is static.
-- The payment step is a self-transaction used as an on-chain confirmation gate for each encrypt and decrypt action.
-- There is not yet a smart-contract fee recipient or on-chain receipt registry.
+- Smart contracts are deployed on Sepolia testnet, not Ethereum mainnet.
 
 ## Future improvements
 
-- Replace the self-transaction with a real vault payment contract
-- Add smart contract receipt anchoring on Sepolia
-- Store receipt hashes on-chain
+- Deploy contracts to Ethereum mainnet for production use
 - Move RPC/token usage behind a backend or proxy
 - Add drag-and-drop uploads
 - Add stronger file integrity reporting
